@@ -61,7 +61,7 @@ Access the authenticated User entry:
 
 ```go
 routeHandlerFunc := func(w http.ResponseWriter, r *http.Request) {
-	user := basicauth.GetUser(r)
+	user := basicauth.GetUser(r).(*basicauth.SimpleUser)
 	// user.Username
 	// user.Password
 }
