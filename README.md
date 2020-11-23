@@ -57,6 +57,18 @@ Or register the middleware to a single `http.HandlerFunc` route:
 mux.HandleFunc("/", basicauth.HandlerFunc(auth, routeHandlerFunc))
 ```
 
+Access the authenticated User entry:
+
+```go
+routeHandlerFunc := func (w http.ResponseWriter, r *http.Request) {
+	user := basicauth.GetUser(r)
+	// user.Username
+	// user.Password
+}
+```
+
+> The `*http.Request.BasicAuth()` works too, but it has limitations when it comes to a [custom user struct](_examples/users_list/main.go).
+
 For a more detailed technical documentation you can head over to our [godocs](https://pkg.go.dev/github.com/kataras/basicauth).
 
 ## License
