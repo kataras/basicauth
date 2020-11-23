@@ -9,7 +9,7 @@ Download the folder.
 Install [Docker](https://www.docker.com/) and execute the command below
 
 ```sh
-$ docker-compose up
+$ docker-compose up --build
 ```
 
 ### Install (Manually)
@@ -28,3 +28,17 @@ MYSQL_DATABASE=myapp
 ```
 
 Download the schema from [migration/db.sql](migration/db.sql) and execute it against your MySQL server instance.
+
+<http://localhost:8080>
+
+```sh
+username: admin
+password: admin
+```
+
+```sh
+username: iris
+password: iris_password
+```
+
+The example does not contain code to add a user to the database, as this is out of the scope of this middleware. More features can be implemented by end-developers.

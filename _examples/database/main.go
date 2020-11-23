@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"github.com/kataras/basicauth"
+
+	_ "github.com/go-sql-driver/mysql" // lint: mysql driver.
 )
 
 // User is just an example structure of a user,
@@ -36,7 +38,7 @@ func main() {
 
 	// Validate a user from database.
 	allowFunc := func(r *http.Request, username, password string) (interface{}, bool) {
-		user, err := db.getUserByUsernameAndPassword(context.Background(), &user, username, password)
+		user, err := db.getUserByUsernameAndPassword(context.Background(), username, password)
 		return user, err == nil
 	}
 
@@ -94,7 +96,7 @@ func (db *database) getUserByUsernameAndPassword(ctx context.Context, username, 
 	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ? AND %s = ? LIMIT 1", "users", "username", "password")
 	rows, err := db.QueryContext(ctx, query, username, password)
 	if err != nil {
-		return Users{}, err
+		return User{}, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
@@ -102,6 +104,6 @@ func (db *database) getUserByUsernameAndPassword(ctx context.Context, username, 
 	}
 
 	var user User
-	err := rows.Scan(&user.ID, &user.Username, &user.Password, &user.Email)
+	err = rows.Scan(&user.ID, &user.Username, &user.Password, &user.Email)
 	return user, err
 }
