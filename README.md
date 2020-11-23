@@ -6,7 +6,7 @@ The most advanced and powerful Go HTTP middleware to handle basic authentication
 
 In the context of an HTTP transaction, basic access authentication is a method for an HTTP user agent (e.g. a web browser) to provide a user name and password when making a request [RFC 7617](https://tools.ietf.org/html/rfc7617).
 
-> Looking for JWT? Navigate [here](https://github.com/kataras/jwt) instead
+> Looking for JWT? Navigate through [kataras/jwt](https://github.com/kataras/jwt) instead.
 
 ## Installation
 
@@ -60,7 +60,7 @@ mux.HandleFunc("/", basicauth.HandlerFunc(auth, routeHandlerFunc))
 Access the authenticated User entry:
 
 ```go
-routeHandlerFunc := func (w http.ResponseWriter, r *http.Request) {
+routeHandlerFunc := func(w http.ResponseWriter, r *http.Request) {
 	user := basicauth.GetUser(r)
 	// user.Username
 	// user.Password
