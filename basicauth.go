@@ -102,7 +102,7 @@ type Options struct {
 	// There are two available builtin values, the AllowUsers and AllowUsersFile,
 	// both of them decode a static list of users and compares with the user input (see BCRYPT function too).
 	// Usage:
-	//  - Allow: AllowUsers(iris.Map{"username": "...", "password": "...", "other_field": ...}, [BCRYPT])
+	//  - Allow: AllowUsers(map[string]interface{}{"username": "...", "password": "...", "other_field": ...}, [BCRYPT])
 	//  - Allow: AllowUsersFile("users.yml", [BCRYPT])
 	// Look the user.go source file for details.
 	Allow AuthFunc
@@ -206,7 +206,7 @@ type BasicAuth struct {
 // Example Code:
 //  opts := basicauth.Options{
 //  	Realm: basicauth.DefaultRealm,
-//      ErrorHandler: basicauth.ErrorHandler,
+//      ErrorHandler: basicauth.DefaultErrorHandler,
 //  	MaxAge: 2 * time.Hour,
 //  	GC: basicauth.GC{
 //  		Every: 3 * time.Hour,
@@ -218,6 +218,8 @@ type BasicAuth struct {
 //  [...routes]
 //  http.ListenAndServe(":8080", auth(mux))
 //
+// Access the user in the route handler with:
+//  basicauth.GetUser(r).(*myCustomType) / (*basicauth.SimpleUser).
 // Look the BasicAuth type docs for more information.
 func New(opts Options) Middleware {
 	var (

@@ -31,12 +31,12 @@ func main() {
 		// Defaults to 0, no expiration.
 		// Prompt for new credentials on a client's request
 		// made after 10 minutes the user has logged in:
-		MaxAge: 20 * time.Second,
+		MaxAge: 10 * time.Minute,
 		// Clear any expired users from the memory every one hour,
 		// note that the user's expiration time will be
 		// reseted on the next valid request (when Allow passed).
 		GC: basicauth.GC{
-			Every: 1 * time.Minute,
+			Every: 2 * time.Hour,
 		},
 		// The users can be a slice of custom users structure
 		// or a map[string]string (username:password)

@@ -22,7 +22,7 @@ Please star this open source project to attract more developers so that together
 
 - [Basic](_examples/basic/main.go)
 - [Load from a slice of Users](_examples/users_list/main.go)
-- [Load from a file & encrypted passwords](_examples/users_file_bcrypt/main.go)
+- [Load from a file & encrypted passwords](_examples/users_file_bcrypt)
 - [Fetch & validate a User from a Database (MySQL)](_examples/database)
 
 ## Getting Started
