@@ -69,10 +69,11 @@ type UserAuthOption func(*UserAuthOptions)
 // See https://www.usenix.org/legacy/event/usenix99/provos/provos.pdf.
 //
 // Usage:
-//  Default(..., BCRYPT) OR
-//  Load(..., BCRYPT) OR
-//  Options.Allow = AllowUsers(..., BCRYPT) OR
-//  OPtions.Allow = AllowUsersFile(..., BCRYPT)
+//
+//	Default(..., BCRYPT) OR
+//	Load(..., BCRYPT) OR
+//	Options.Allow = AllowUsers(..., BCRYPT) OR
+//	OPtions.Allow = AllowUsersFile(..., BCRYPT)
 func BCRYPT(opts *UserAuthOptions) {
 	opts.ComparePassword = func(stored, userPassword string) bool {
 		err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(userPassword))
@@ -96,10 +97,11 @@ func toUserAuthOptions(opts []UserAuthOption) (options UserAuthOptions) {
 
 // AllowUsers is an AuthFunc which authenticates user input based on a (static) user list.
 // The "users" input parameter can be one of the following forms:
-//  map[string]string e.g. {username: password, username: password...}.
-//  []map[string]interface{} e.g. []{"username": "...", "password": "...", "other_field": ...}, ...}.
-//  []T which T completes the User interface.
-//  []T which T contains at least Username and Password fields.
+//
+//	map[string]string e.g. {username: password, username: password...}.
+//	[]map[string]interface{} e.g. []{"username": "...", "password": "...", "other_field": ...}, ...}.
+//	[]T which T completes the User interface.
+//	[]T which T contains at least Username and Password fields.
 //
 // Usage:
 // New(Options{Allow: AllowUsers(..., [BCRYPT])})
@@ -176,15 +178,17 @@ func userMap(usernamePassword map[string]string, opts ...UserAuthOption) AuthFun
 // loaded from a file on initialization.
 //
 // Example Code:
-//  New(Options{Allow: AllowUsersFile("users.yml", BCRYPT)})
+//
+//	New(Options{Allow: AllowUsersFile("users.yml", BCRYPT)})
+//
 // The users.yml file looks like the following:
-//  - username: kataras
-//    password: kataras_pass
-//    age: 27
-//    role: admin
-//  - username: makis
-//    password: makis_password
-//    ...
+//   - username: kataras
+//     password: kataras_pass
+//     age: 27
+//     role: admin
+//   - username: makis
+//     password: makis_password
+//     ...
 func AllowUsersFile(jsonOrYamlFilename string, opts ...UserAuthOption) AuthFunc {
 	var (
 		usernamePassword map[string]string

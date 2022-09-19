@@ -45,7 +45,8 @@ type (
 // Maybe useful for some third-party handlers chaining.
 //
 // Usage:
-//  mux.HandleFunc("/", basicauth.Func(auth)(index))
+//
+//	mux.HandleFunc("/", basicauth.Func(auth)(index))
 func Func(auth Middleware) func(http.HandlerFunc) http.HandlerFunc {
 	return func(fn http.HandlerFunc) http.HandlerFunc {
 		return auth(fn).ServeHTTP
@@ -56,7 +57,8 @@ func Func(auth Middleware) func(http.HandlerFunc) http.HandlerFunc {
 // and a handler and returns a HandlerFunc.
 //
 // Usage:
-//  mux.HandleFunc("/", basicauth.HandlerFunc(auth, index))
+//
+//	mux.HandleFunc("/", basicauth.HandlerFunc(auth, index))
 func HandlerFunc(auth Middleware, handlerFunc func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return auth(http.HandlerFunc(handlerFunc)).ServeHTTP
 }
@@ -77,8 +79,9 @@ type ErrorHandler func(w http.ResponseWriter, r *http.Request, err error)
 // The only required value is the Allow field.
 //
 // Usage:
-//  opts := Options { ... }
-//  auth := New(opts)
+//
+//	opts := Options { ... }
+//	auth := New(opts)
 type Options struct {
 	// Realm directive, read http://tools.ietf.org/html/rfc2617#section-1.2 for details.
 	// E.g. "Authorization Required".
@@ -204,22 +207,25 @@ type BasicAuth struct {
 // The result should be used to wrap an existing handler or the HTTP application's root router.
 //
 // Example Code:
-//  opts := basicauth.Options{
-//  	Realm: basicauth.DefaultRealm,
-//      ErrorHandler: basicauth.DefaultErrorHandler,
-//  	MaxAge: 2 * time.Hour,
-//  	GC: basicauth.GC{
-//  		Every: 3 * time.Hour,
-//  	},
-//  	Allow: basicauth.AllowUsers(users),
-//  }
-//  auth := basicauth.New(opts)
-//  mux := http.NewServeMux()
-//  [...routes]
-//  http.ListenAndServe(":8080", auth(mux))
+//
+//	opts := basicauth.Options{
+//		Realm: basicauth.DefaultRealm,
+//	    ErrorHandler: basicauth.DefaultErrorHandler,
+//		MaxAge: 2 * time.Hour,
+//		GC: basicauth.GC{
+//			Every: 3 * time.Hour,
+//		},
+//		Allow: basicauth.AllowUsers(users),
+//	}
+//	auth := basicauth.New(opts)
+//	mux := http.NewServeMux()
+//	[...routes]
+//	http.ListenAndServe(":8080", auth(mux))
 //
 // Access the user in the route handler with:
-//  basicauth.GetUser(r).(*myCustomType) / (*basicauth.SimpleUser).
+//
+//	basicauth.GetUser(r).(*myCustomType) / (*basicauth.SimpleUser).
+//
 // Look the BasicAuth type docs for more information.
 func New(opts Options) Middleware {
 	var (
@@ -273,16 +279,18 @@ func New(opts Options) Middleware {
 // are required as they are compared against the user input
 // when access to protected resource is requested.
 // A user list can defined with one of the following values:
-//  map[string]string form of: {username:password, ...}
-//  map[string]interface{} form of: {"username": {"password": "...", "other_field": ...}, ...}
-//  []T which T completes the User interface, where T is a struct value
-//  []T which T contains at least Username and Password fields.
+//
+//	map[string]string form of: {username:password, ...}
+//	map[string]interface{} form of: {"username": {"password": "...", "other_field": ...}, ...}
+//	[]T which T completes the User interface, where T is a struct value
+//	[]T which T contains at least Username and Password fields.
 //
 // Usage:
-//  auth := Default(map[string]string{
-//    "admin": "admin",
-//    "john": "p@ss",
-//  })
+//
+//	auth := Default(map[string]string{
+//	  "admin": "admin",
+//	  "john": "p@ss",
+//	})
 func Default(users interface{}, userOpts ...UserAuthOption) Middleware {
 	opts := Options{
 		Realm: DefaultRealm,
@@ -295,7 +303,8 @@ func Default(users interface{}, userOpts ...UserAuthOption) Middleware {
 // a filename to load the users from.
 //
 // Usage:
-//  auth := Load("users.yml")
+//
+//	auth := Load("users.yml")
 func Load(jsonOrYamlFilename string, userOpts ...UserAuthOption) Middleware {
 	opts := Options{
 		Realm: DefaultRealm,

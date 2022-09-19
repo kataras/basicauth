@@ -1,8 +1,8 @@
 # Basic Authentication
 
-[![build status](https://img.shields.io/travis/com/kataras/basicauth/main.svg?style=for-the-badge&logo=travis)](https://travis-ci.com/github/kataras/basicauth) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/basicauth) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://pkg.go.dev/github.com/kataras/basicauth)
+[![build status](https://img.shields.io/github/workflow/status/kataras/basicauth/CI/main?style=for-the-badge)](https://github.com/kataras/basicauth/actions) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/basicauth) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://pkg.go.dev/github.com/kataras/basicauth)
 
-The most advanced and powerful Go HTTP middleware to handle basic authentication. It is fully compatible with the [net/http](https://golang.org/pkg/net/http/) package and third-party frameworks.
+The most advanced and powerful Go HTTP middleware to handle basic authentication. It is fully compatible with the [net/http](https://pkg.go.dev/net/http) package and third-party frameworks.
 
 In the context of an HTTP transaction, basic access authentication is a method for an HTTP user agent (e.g. a web browser) to provide a user name and password when making a request [RFC 7617](https://tools.ietf.org/html/rfc7617).
 
@@ -10,7 +10,7 @@ In the context of an HTTP transaction, basic access authentication is a method f
 
 ## Installation
 
-The only requirement is the [Go Programming Language](https://golang.org/dl).
+The only requirement is the [Go Programming Language](https://go.dev/dl/).
 
 ```sh
 $ go get github.com/kataras/basicauth
