@@ -1,6 +1,6 @@
 # Basic Authentication
 
-[![build status](https://img.shields.io/github/workflow/status/kataras/basicauth/CI/main?style=for-the-badge)](https://github.com/kataras/basicauth/actions) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/basicauth) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://pkg.go.dev/github.com/kataras/basicauth)
+[![build status](https://img.shields.io/github/actions/workflow/status/kataras/basicauth/ci.yml?style=for-the-badge)](https://github.com/kataras/basicauth/actions) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/basicauth) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://pkg.go.dev/github.com/kataras/basicauth)
 
 The most advanced and powerful Go HTTP middleware to handle basic authentication. It is fully compatible with the [net/http](https://pkg.go.dev/net/http) package and third-party frameworks.
 
