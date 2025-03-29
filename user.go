@@ -3,8 +3,8 @@ package basicauth
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 
@@ -15,8 +15,8 @@ import (
 // ReadFile can be used to customize the way the
 // AllowUsersFile function is loading the filename from.
 // Example of usage: embedded users.yml file.
-// Defaults to the `ioutil.ReadFile` which reads the file from the physical disk.
-var ReadFile = ioutil.ReadFile
+// Defaults to the `os.ReadFile` which reads the file from the physical disk.
+var ReadFile = os.ReadFile
 
 // User can be implemented by custom struct values
 // to provide the username and the password as

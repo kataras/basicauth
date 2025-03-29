@@ -2,7 +2,6 @@ package basicauth
 
 import (
 	"errors"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"reflect"
@@ -163,13 +162,13 @@ func TestAllowUsers(t *testing.T) {
 
 // Test YAML user loading with b-encrypted passwords.
 func TestAllowUsersFile(t *testing.T) {
-	f, err := ioutil.TempFile("", "*users.yml")
+	f, err := os.CreateTemp("", "*users.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 	}()
 
 	// 	f.WriteString(`
@@ -239,7 +238,7 @@ func TestAllowUsersFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write(fileContents)
+	_, _ = f.Write(fileContents)
 
 	// Build the authentication func.
 	allow := AllowUsersFile(f.Name(), BCRYPT)

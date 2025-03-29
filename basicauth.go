@@ -508,7 +508,7 @@ func (b *BasicAuth) logout(r *http.Request) *http.Request {
 		// If the custom user does
 		// not implement the User interface, then extract from the request header (most common scenario):
 		header := r.Header.Get(b.authorizationHeader)
-		fullUser, username, password, ok = decodeHeader(header)
+		fullUser, _, _, ok = decodeHeader(header)
 	}
 
 	if ok { // If it's authorized then try to lock and delete.
