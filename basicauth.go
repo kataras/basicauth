@@ -34,8 +34,8 @@ const (
 )
 
 type (
-	// Map is just a type alias of the map[string]interface{}.
-	Map = map[string]interface{}
+	// Map is just a type alias of the map[string]any.
+	Map = map[string]any
 	// Middleware is just a type alias of func(http.Handler) http.Handler
 	Middleware = func(http.Handler) http.Handler
 )
@@ -69,7 +69,7 @@ func HandlerFunc(auth Middleware, handlerFunc func(http.ResponseWriter, *http.Re
 //
 // Default implementations are:
 // AllowUsers and AllowUsersFile functions.
-type AuthFunc func(r *http.Request, username, password string) (interface{}, bool)
+type AuthFunc func(r *http.Request, username, password string) (any, bool)
 
 // ErrorHandler should handle the given request credentials failure.
 // See Options.ErrorHandler and DefaultErrorHandler for details.
@@ -105,7 +105,7 @@ type Options struct {
 	// There are two available builtin values, the AllowUsers and AllowUsersFile,
 	// both of them decode a static list of users and compares with the user input (see BCRYPT function too).
 	// Usage:
-	//  - Allow: AllowUsers(map[string]interface{}{"username": "...", "password": "...", "other_field": ...}, [BCRYPT])
+	//  - Allow: AllowUsers(map[string]any{"username": "...", "password": "...", "other_field": ...}, [BCRYPT])
 	//  - Allow: AllowUsersFile("users.yml", [BCRYPT])
 	// Look the user.go source file for details.
 	Allow AuthFunc
@@ -281,7 +281,7 @@ func New(opts Options) Middleware {
 // A user list can defined with one of the following values:
 //
 //	map[string]string form of: {username:password, ...}
-//	map[string]interface{} form of: {"username": {"password": "...", "other_field": ...}, ...}
+//	map[string]any form of: {"username": {"password": "...", "other_field": ...}, ...}
 //	[]T which T completes the User interface, where T is a struct value
 //	[]T which T contains at least Username and Password fields.
 //
@@ -291,7 +291,7 @@ func New(opts Options) Middleware {
 //	  "admin": "admin",
 //	  "john": "p@ss",
 //	})
-func Default(users interface{}, userOpts ...UserAuthOption) Middleware {
+func Default(users any, userOpts ...UserAuthOption) Middleware {
 	opts := Options{
 		Realm: DefaultRealm,
 		Allow: AllowUsers(users, userOpts...),

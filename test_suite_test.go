@@ -27,7 +27,7 @@ func (te *testie) fatal(err error) {
 	te.t.Fatal(msg)
 }
 
-func (te *testie) fatalf(format string, args ...interface{}) {
+func (te *testie) fatalf(format string, args ...any) {
 	te.fatal(fmt.Errorf(format, args...))
 }
 
@@ -39,7 +39,7 @@ func (te *testie) statusCode(expected int) *testie {
 	return te
 }
 
-func (te *testie) jsonEq(v interface{}) *testie {
+func (te *testie) jsonEq(v any) *testie {
 	media, _, err := mime.ParseMediaType(te.resp.Header.Get("Content-Type"))
 	if err != nil {
 		te.fatal(err)
@@ -95,7 +95,7 @@ func withBasicAuth(username, password string) requestOption {
 	}
 }
 
-func withRequestID(id interface{}) requestOption { // useful for logging.
+func withRequestID(id any) requestOption { // useful for logging.
 	return func(r *http.Request) error {
 		r.Header.Set("X-Request-Id", fmt.Sprintf("%v", id))
 		return nil

@@ -57,7 +57,7 @@ func TestNew(t *testing.T) {
 	var tests = []struct {
 		username, password string
 		ok                 bool
-		user               interface{}
+		user               any
 	}{
 		{"kataras", "kataras_pass", true, users[0]},
 		{"george", "george_pass", true, users[1]},
