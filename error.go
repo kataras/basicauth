@@ -77,6 +77,8 @@ func (e ErrCredentialsExpired) Error() string {
 }
 
 // DefaultErrorHandler is the default error handler for the Options.ErrorHandler field.
+// Custom handlers can inspect the error with a type switch as below
+// or with errors.AsType, e.g. errors.AsType[ErrCredentialsInvalid](err).
 func DefaultErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	switch e := err.(type) {
 	case ErrHTTPVersion:

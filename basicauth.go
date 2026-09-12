@@ -3,8 +3,8 @@ package basicauth
 import (
 	"context"
 	"log"
+	"maps"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +35,7 @@ const (
 
 type (
 	// Map is just a type alias of the map[string]any.
+	// It is the user type of users loaded from a file through Load and AllowUsersFile[Map].
 	Map = map[string]any
 	// Middleware is just a type alias of func(http.Handler) http.Handler
 	Middleware = func(http.Handler) http.Handler
@@ -46,7 +47,7 @@ type (
 //
 // Usage:
 //
-//	mux.HandleFunc("/", basicauth.Func(auth)(index))
+//	mux.HandleFunc("/", basicauth.Func(auth.Middleware())(index))
 func Func(auth Middleware) func(http.HandlerFunc) http.HandlerFunc {
 	return func(fn http.HandlerFunc) http.HandlerFunc {
 		return auth(fn).ServeHTTP
@@ -55,21 +56,22 @@ func Func(auth Middleware) func(http.HandlerFunc) http.HandlerFunc {
 
 // HandlerFunc accepts a Middleware (http.Handler) http.Handler
 // and a handler and returns a HandlerFunc.
+// See the BasicAuth.HandlerFunc method for the shorter form.
 //
 // Usage:
 //
-//	mux.HandleFunc("/", basicauth.HandlerFunc(auth, index))
+//	mux.HandleFunc("/", basicauth.HandlerFunc(auth.Middleware(), index))
 func HandlerFunc(auth Middleware, handlerFunc func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return auth(http.HandlerFunc(handlerFunc)).ServeHTTP
 }
 
 // AuthFunc accepts the current request and the username and password user inputs
-// and it should optionally return a user value and report whether the login succeed or not.
+// and it should return the user value of type U and report whether the login succeeded or not.
 // Look the Options.Allow field.
 //
 // Default implementations are:
-// AllowUsers and AllowUsersFile functions.
-type AuthFunc func(r *http.Request, username, password string) (any, bool)
+// AllowUsers, AllowUsersMap and AllowUsersFile functions.
+type AuthFunc[U any] func(r *http.Request, username, password string) (U, bool)
 
 // ErrorHandler should handle the given request credentials failure.
 // See Options.ErrorHandler and DefaultErrorHandler for details.
@@ -77,12 +79,14 @@ type ErrorHandler func(w http.ResponseWriter, r *http.Request, err error)
 
 // Options holds the necessary information that the BasicAuth instance needs to perform.
 // The only required value is the Allow field.
+// The type parameter U is the type of the authenticated user that Allow returns
+// and that BasicAuth.User (or GetUser) gives back to the handlers.
 //
 // Usage:
 //
-//	opts := Options { ... }
+//	opts := Options[MyUser]{ ... }
 //	auth := New(opts)
-type Options struct {
+type Options[U any] struct {
 	// Realm directive, read http://tools.ietf.org/html/rfc2617#section-1.2 for details.
 	// E.g. "Authorization Required".
 	Realm string
@@ -93,8 +97,10 @@ type Options struct {
 	// Proxy should be used to gain access to a resource behind a proxy server.
 	// It authenticates the request to the proxy server, allowing it to transmit the request further.
 	Proxy bool
-	// If set to true then any non-https request will immediately
-	// dropped with a 505 status code (StatusHTTPVersionNotSupported) response.
+	// If set to true then any request that is not served over TLS
+	// and HTTP/2 is immediately dropped with a 505 status code
+	// (StatusHTTPVersionNotSupported) response. Plain HTTP and HTTPS/1.1
+	// requests are both rejected.
 	//
 	// Defaults to false.
 	HTTPSOnly bool
@@ -102,13 +108,14 @@ type Options struct {
 	// Can be customized to validate a username and password combination
 	// and return a user object, e.g. fetch from database.
 	//
-	// There are two available builtin values, the AllowUsers and AllowUsersFile,
-	// both of them decode a static list of users and compares with the user input (see BCRYPT function too).
+	// There are three builtin implementations, AllowUsers, AllowUsersMap and AllowUsersFile.
+	// All of them decode a static list of users and compare it with the user input (see the BCRYPT option too).
 	// Usage:
-	//  - Allow: AllowUsers(map[string]any{"username": "...", "password": "...", "other_field": ...}, [BCRYPT])
-	//  - Allow: AllowUsersFile("users.yml", [BCRYPT])
+	//  - Allow: AllowUsers([]MyUser{...}, [BCRYPT])
+	//  - Allow: AllowUsersMap(map[string]string{"username": "password"}, [BCRYPT])
+	//  - Allow: AllowUsersFile[Map]("users.yml", [BCRYPT])
 	// Look the user.go source file for details.
-	Allow AuthFunc
+	Allow AuthFunc[U]
 	// MaxAge sets expiration duration for the in-memory credentials map.
 	// By default an old map entry will be removed when the user visits a page.
 	// In order to remove old entries automatically please take a look at the `GC` option too.
@@ -116,7 +123,7 @@ type Options struct {
 	// Usage:
 	//  MaxAge: 30 * time.Minute
 	MaxAge time.Duration
-	// If greater than zero then the server will send 403 forbidden status code afer
+	// If greater than zero then the server will send 403 forbidden status code after
 	// MaxTries amount of sign in failures (see MaxTriesCookie).
 	// Note that the client can modify the cookie and its value,
 	// do NOT depend for any type of custom domain logic based on this field.
@@ -157,7 +164,7 @@ type Options struct {
 	GC GC
 	// OnLogoutClearContext will clear the context values stored by
 	// the middleware when Logout is called.
-	// This means that the GetUser will return nil after a Logout call was made.
+	// This means that the User and GetUser will report false after a Logout call was made.
 	//
 	// Defaults to false.
 	OnLogoutClearContext bool
@@ -185,10 +192,14 @@ type GC struct {
 // Without these additional security enhancements,
 // basic authentication should NOT be used to protect sensitive or valuable information.
 //
+// The type parameter U is the authenticated user type, see Options.
+// Wrap a handler with the Wrap or HandlerFunc methods and read the user back
+// inside the handlers with the User method.
+//
 // Read https://tools.ietf.org/html/rfc2617 and
 // https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication for details.
-type BasicAuth struct {
-	opts Options
+type BasicAuth[U any] struct {
+	opts Options[U]
 	// built based on proxy field
 	askCode             int
 	authorizationHeader string
@@ -197,18 +208,19 @@ type BasicAuth struct {
 	authenticateHeaderValue string
 
 	// credentials stores the user expiration,
-	// key = username:password, value = expiration time (if MaxAge > 0).
-	credentials map[string]*time.Time // TODO: think of just a uint64 here (unix seconds).
+	// key = username:password, value = expiration time.
+	// The zero time means the entry never expires (MaxAge == 0).
+	credentials map[string]time.Time
 	// protects the credentials concurrent access.
 	mu sync.RWMutex
 }
 
 // New returns a new basic authentication middleware.
-// The result should be used to wrap an existing handler or the HTTP application's root router.
+// Wrap an existing handler or the HTTP application's root router with its Wrap method.
 //
 // Example Code:
 //
-//	opts := basicauth.Options{
+//	auth := basicauth.New(basicauth.Options[MyUser]{
 //		Realm: basicauth.DefaultRealm,
 //	    ErrorHandler: basicauth.DefaultErrorHandler,
 //		MaxAge: 2 * time.Hour,
@@ -216,18 +228,17 @@ type BasicAuth struct {
 //			Every: 3 * time.Hour,
 //		},
 //		Allow: basicauth.AllowUsers(users),
-//	}
-//	auth := basicauth.New(opts)
+//	})
 //	mux := http.NewServeMux()
 //	[...routes]
-//	http.ListenAndServe(":8080", auth(mux))
+//	http.ListenAndServe(":8080", auth.Wrap(mux))
 //
 // Access the user in the route handler with:
 //
-//	basicauth.GetUser(r).(*myCustomType) / (*basicauth.SimpleUser).
+//	user, ok := auth.User(r) // user is a MyUser.
 //
 // Look the BasicAuth type docs for more information.
-func New(opts Options) Middleware {
+func New[U any](opts Options[U]) *BasicAuth[U] {
 	var (
 		askCode                 = http.StatusUnauthorized
 		authorizationHeader     = authorizationHeaderKey
@@ -257,33 +268,26 @@ func New(opts Options) Middleware {
 		opts.ErrorHandler = DefaultErrorHandler
 	}
 
-	b := &BasicAuth{
+	b := &BasicAuth[U]{
 		opts:                    opts,
 		askCode:                 askCode,
 		authorizationHeader:     authorizationHeader,
 		authenticateHeader:      authenticateHeader,
 		authenticateHeaderValue: authenticateHeaderValue,
-		credentials:             make(map[string]*time.Time),
+		credentials:             make(map[string]time.Time),
 	}
 
 	if opts.GC.Every > 0 {
 		go b.runGC(opts.GC.Context, opts.GC.Every)
 	}
 
-	return b.serveHTTP
+	return b
 }
 
 // Default returns a new basic authentication middleware
-// based on pre-defined user list.
-// A user can hold any custom fields but the username and password
-// are required as they are compared against the user input
-// when access to protected resource is requested.
-// A user list can defined with one of the following values:
-//
-//	map[string]string form of: {username:password, ...}
-//	map[string]any form of: {"username": {"password": "...", "other_field": ...}, ...}
-//	[]T which T completes the User interface, where T is a struct value
-//	[]T which T contains at least Username and Password fields.
+// based on a pre-defined username:password list.
+// The authenticated user is a SimpleUser.
+// For custom user types use New with AllowUsers or AllowUsersFile.
 //
 // Usage:
 //
@@ -291,29 +295,70 @@ func New(opts Options) Middleware {
 //	  "admin": "admin",
 //	  "john": "p@ss",
 //	})
-func Default(users any, userOpts ...UserAuthOption) Middleware {
-	opts := Options{
+func Default(users map[string]string, userOpts ...UserAuthOption[SimpleUser]) *BasicAuth[SimpleUser] {
+	return New(Options[SimpleUser]{
 		Realm: DefaultRealm,
-		Allow: AllowUsers(users, userOpts...),
-	}
-	return New(opts)
+		Allow: AllowUsersMap(users, userOpts...),
+	})
 }
 
 // Load same as Default but instead of a hard-coded user list it accepts
-// a filename to load the users from.
+// a filename to load the users from. The authenticated user is a Map.
+// For a typed user use New with AllowUsersFile[MyUser].
 //
 // Usage:
 //
 //	auth := Load("users.yml")
-func Load(jsonOrYamlFilename string, userOpts ...UserAuthOption) Middleware {
-	opts := Options{
+func Load(jsonOrYamlFilename string, userOpts ...UserAuthOption[Map]) *BasicAuth[Map] {
+	return New(Options[Map]{
 		Realm: DefaultRealm,
-		Allow: AllowUsersFile(jsonOrYamlFilename, userOpts...),
-	}
-	return New(opts)
+		Allow: AllowUsersFile[Map](jsonOrYamlFilename, userOpts...),
+	})
 }
 
-func (b *BasicAuth) getCurrentTries(r *http.Request) (tries int) {
+// Wrap returns a handler that authenticates the request
+// and calls "next" only when the client is allowed to continue.
+//
+// Usage:
+//
+//	http.ListenAndServe(":8080", auth.Wrap(mux))
+func (b *BasicAuth[U]) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.serveHTTP(w, r, next)
+	})
+}
+
+// HandlerFunc wraps a single route handler function.
+//
+// Usage:
+//
+//	mux.HandleFunc("/", auth.HandlerFunc(index))
+func (b *BasicAuth[U]) HandlerFunc(handlerFunc func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return b.Wrap(http.HandlerFunc(handlerFunc)).ServeHTTP
+}
+
+// Middleware returns the Wrap method as a Middleware value,
+// useful for third-party handler chains that accept func(http.Handler) http.Handler.
+func (b *BasicAuth[U]) Middleware() Middleware {
+	return b.Wrap
+}
+
+// User returns the authenticated user of the request as stored by this middleware.
+// It reports false when the request did not pass through this middleware
+// or when the user was cleared by Logout with Options.OnLogoutClearContext enabled.
+func (b *BasicAuth[U]) User(r *http.Request) (U, bool) {
+	return GetUser[U](r)
+}
+
+// Logout deletes the authenticated user entry from the backend.
+// The client should login again on the next request.
+// It returns the request to use from now on, which differs from the given one
+// only when Options.OnLogoutClearContext is enabled.
+func (b *BasicAuth[U]) Logout(r *http.Request) *http.Request {
+	return b.logout(r)
+}
+
+func (b *BasicAuth[U]) getCurrentTries(r *http.Request) (tries int) {
 	if cookie, err := r.Cookie(b.opts.MaxTriesCookie); err == nil {
 		if v := cookie.Value; v != "" {
 			tries, _ = strconv.Atoi(v)
@@ -323,7 +368,7 @@ func (b *BasicAuth) getCurrentTries(r *http.Request) (tries int) {
 	return
 }
 
-func (b *BasicAuth) setCurrentTries(w http.ResponseWriter, tries int) {
+func (b *BasicAuth[U]) setCurrentTries(w http.ResponseWriter, tries int) {
 	maxAge := b.opts.MaxAge
 	if maxAge == 0 {
 		maxAge = DefaultCookieMaxAge // 1 hour.
@@ -332,7 +377,7 @@ func (b *BasicAuth) setCurrentTries(w http.ResponseWriter, tries int) {
 	c := &http.Cookie{
 		Name:     b.opts.MaxTriesCookie,
 		Path:     "/",
-		Value:    url.QueryEscape(strconv.Itoa(tries)),
+		Value:    strconv.Itoa(tries),
 		HttpOnly: true,
 		Expires:  time.Now().Add(maxAge),
 		MaxAge:   int(maxAge.Seconds()),
@@ -341,7 +386,7 @@ func (b *BasicAuth) setCurrentTries(w http.ResponseWriter, tries int) {
 	http.SetCookie(w, c)
 }
 
-func (b *BasicAuth) resetCurrentTries(w http.ResponseWriter) {
+func (b *BasicAuth[U]) resetCurrentTries(w http.ResponseWriter) {
 	c := &http.Cookie{
 		Name:     b.opts.MaxTriesCookie,
 		Path:     "/",
@@ -357,7 +402,7 @@ func isHTTPS(r *http.Request) bool {
 	return (strings.EqualFold(r.URL.Scheme, "https") || r.TLS != nil) && r.ProtoMajor == 2
 }
 
-func (b *BasicAuth) handleError(w http.ResponseWriter, r *http.Request, err error) {
+func (b *BasicAuth[U]) handleError(w http.ResponseWriter, r *http.Request, err error) {
 	if b.opts.ErrorLogger != nil {
 		b.opts.ErrorLogger.Println(err)
 	}
@@ -367,146 +412,130 @@ func (b *BasicAuth) handleError(w http.ResponseWriter, r *http.Request, err erro
 }
 
 // serveHTTP is the main method of this middleware,
-// checks and verifies the auhorization header for basic authentication,
-// next handlers will only be executed when the client is allowed to continue.
-func (b *BasicAuth) serveHTTP(next http.Handler) http.Handler {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		if b.opts.HTTPSOnly && !isHTTPS(r) {
-			b.handleError(w, r, ErrHTTPVersion{})
-			return
-		}
-
-		header := r.Header.Get(b.authorizationHeader)
-		fullUser, username, password, ok := decodeHeader(header)
-		if !ok { // Header is malformed or missing (e.g. browser cancel button on user prompt).
-			b.handleError(w, r, ErrCredentialsMissing{
-				Header:                  header,
-				AuthenticateHeader:      b.authenticateHeader,
-				AuthenticateHeaderValue: b.authenticateHeaderValue,
-				Code:                    b.askCode,
-			})
-			return
-		}
-
-		var (
-			maxTries = b.opts.MaxTries
-			tries    int
-		)
-
-		if maxTries > 0 {
-			tries = b.getCurrentTries(r)
-		}
-
-		user, ok := b.opts.Allow(r, username, password)
-		if !ok { // This username:password combination was not allowed.
-			if maxTries > 0 {
-				tries++
-				b.setCurrentTries(w, tries)
-				if tries >= maxTries { // e.g. if MaxTries == 1 then it should be allowed only once, so we must send forbidden now.
-					b.handleError(w, r, ErrCredentialsForbidden{
-						Username: username,
-						Password: password,
-						Tries:    tries,
-						Age:      b.opts.MaxAge,
-					})
-					return
-				}
-			}
-
-			b.handleError(w, r, ErrCredentialsInvalid{
-				Username:                username,
-				Password:                password,
-				CurrentTries:            tries,
-				AuthenticateHeader:      b.authenticateHeader,
-				AuthenticateHeaderValue: b.authenticateHeaderValue,
-				Code:                    b.askCode,
-			})
-			return
-		}
-
-		if tries > 0 {
-			// had failures but it's ok, reset the tries on success.
-			b.resetCurrentTries(w)
-		}
-
-		b.mu.RLock()
-		expiresAt, ok := b.credentials[fullUser]
-		b.mu.RUnlock()
-		if ok {
-			if expiresAt != nil { // Has expiration.
-				if expiresAt.Before(time.Now()) { // Has been expired.
-					b.mu.Lock() // Delete the entry.
-					delete(b.credentials, fullUser)
-					b.mu.Unlock()
-
-					// Re-ask for new credentials.
-					b.handleError(w, r, ErrCredentialsExpired{
-						Username:                username,
-						Password:                password,
-						AuthenticateHeader:      b.authenticateHeader,
-						AuthenticateHeaderValue: b.authenticateHeaderValue,
-						Code:                    b.askCode,
-					})
-					return
-				}
-
-			}
-		} else {
-			// Saved credential not found, first login.
-			if b.opts.MaxAge > 0 { // Expiration is enabled, set the value.
-				t := time.Now().Add(b.opts.MaxAge)
-				expiresAt = &t
-			}
-			b.mu.Lock()
-			b.credentials[fullUser] = expiresAt
-			b.mu.Unlock()
-		}
-
-		if user == nil {
-			// No custom uset was set by the auth func,
-			// it is passed though, set a simple user here:
-			user = &SimpleUser{
-				Username: username,
-				Password: password,
-			}
-		}
-
-		// Store user instance and logout function.
-		// Note that the end-developer has always have access
-		// to the Request.BasicAuth, however, we support any user struct,
-		// so we must store it on this request instance so it can be retrieved later on.
-		r = r.WithContext(newContext(r.Context(), user, b.logout))
-		next.ServeHTTP(w, r)
+// checks and verifies the authorization header for basic authentication,
+// the next handler will only be executed when the client is allowed to continue.
+func (b *BasicAuth[U]) serveHTTP(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	if b.opts.HTTPSOnly && !isHTTPS(r) {
+		b.handleError(w, r, ErrHTTPVersion{})
+		return
 	}
 
-	return http.HandlerFunc(handler)
+	header := r.Header.Get(b.authorizationHeader)
+	fullUser, username, password, ok := decodeHeader(header)
+	if !ok { // Header is malformed or missing (e.g. browser cancel button on user prompt).
+		b.handleError(w, r, ErrCredentialsMissing{
+			Header:                  header,
+			AuthenticateHeader:      b.authenticateHeader,
+			AuthenticateHeaderValue: b.authenticateHeaderValue,
+			Code:                    b.askCode,
+		})
+		return
+	}
+
+	var (
+		maxTries = b.opts.MaxTries
+		tries    int
+	)
+
+	if maxTries > 0 {
+		tries = b.getCurrentTries(r)
+	}
+
+	user, ok := b.opts.Allow(r, username, password)
+	if !ok { // This username:password combination was not allowed.
+		if maxTries > 0 {
+			tries++
+			b.setCurrentTries(w, tries)
+			if tries >= maxTries { // e.g. if MaxTries == 1 then it should be allowed only once, so we must send forbidden now.
+				b.handleError(w, r, ErrCredentialsForbidden{
+					Username: username,
+					Password: password,
+					Tries:    tries,
+					Age:      b.opts.MaxAge,
+				})
+				return
+			}
+		}
+
+		b.handleError(w, r, ErrCredentialsInvalid{
+			Username:                username,
+			Password:                password,
+			CurrentTries:            tries,
+			AuthenticateHeader:      b.authenticateHeader,
+			AuthenticateHeaderValue: b.authenticateHeaderValue,
+			Code:                    b.askCode,
+		})
+		return
+	}
+
+	if tries > 0 {
+		// had failures but it's ok, reset the tries on success.
+		b.resetCurrentTries(w)
+	}
+
+	now := time.Now()
+
+	b.mu.RLock()
+	expiresAt, ok := b.credentials[fullUser]
+	b.mu.RUnlock()
+	if ok {
+		// A zero expiresAt means the entry never expires.
+		if !expiresAt.IsZero() && expiresAt.Before(now) { // Has been expired.
+			b.mu.Lock() // Delete the entry.
+			delete(b.credentials, fullUser)
+			b.mu.Unlock()
+
+			// Re-ask for new credentials.
+			b.handleError(w, r, ErrCredentialsExpired{
+				Username:                username,
+				Password:                password,
+				AuthenticateHeader:      b.authenticateHeader,
+				AuthenticateHeaderValue: b.authenticateHeaderValue,
+				Code:                    b.askCode,
+			})
+			return
+		}
+	} else {
+		// Saved credential not found, first login.
+		if b.opts.MaxAge > 0 { // Expiration is enabled, set the value.
+			expiresAt = now.Add(b.opts.MaxAge)
+		}
+		b.mu.Lock()
+		b.credentials[fullUser] = expiresAt
+		b.mu.Unlock()
+	}
+
+	// Store user instance and logout function.
+	// Note that the end-developer always has access
+	// to the Request.BasicAuth, however, we support any user type,
+	// so we must store it on this request instance so it can be retrieved later on.
+	r = r.WithContext(newContext(r.Context(), user, b.logout))
+	next.ServeHTTP(w, r)
 }
 
 // logout clears the current user's credentials.
-func (b *BasicAuth) logout(r *http.Request) *http.Request {
+func (b *BasicAuth[U]) logout(r *http.Request) *http.Request {
 	var (
-		fullUser, username, password string
-		ok                           bool
+		fullUser string
+		ok       bool
 	)
 
-	if v := GetUser(r); v != nil { // Get the saved ones, if any.
-		if u, isUser := v.(User); isUser {
-			username = u.GetUsername()
-			password = u.GetPassword()
+	if info := getAuthInfo(r); info != nil { // Get the saved ones, if any.
+		if u, isUser := info.user.(User); isUser {
+			username, password := u.GetUsername(), u.GetPassword()
 			fullUser = username + colonLiteral + password
 			ok = username != "" && password != ""
 		}
 
 		if b.opts.OnLogoutClearContext {
-			// *r = *(r.WithContext(clearContext(r.Context())))
-			// Let's make it clear that we modify the request here by returning it instead of ^
+			// Let's make it clear that we modify the request here by returning it.
 			r = r.WithContext(clearContext(r.Context()))
 		}
 	}
 
 	if !ok {
-		// If the custom user does
-		// not implement the User interface, then extract from the request header (most common scenario):
+		// If the custom user does not implement the User interface,
+		// then extract from the request header (most common scenario):
 		header := r.Header.Get(b.authorizationHeader)
 		fullUser, _, _, ok = decodeHeader(header)
 	}
@@ -528,7 +557,7 @@ func (b *BasicAuth) logout(r *http.Request) *http.Request {
 
 // runGC runs a function in a separate go routine
 // every x duration to clear in-memory expired credential entries.
-func (b *BasicAuth) runGC(ctx context.Context, every time.Duration) {
+func (b *BasicAuth[U]) runGC(ctx context.Context, every time.Duration) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -549,26 +578,18 @@ func (b *BasicAuth) runGC(ctx context.Context, every time.Duration) {
 // gc removes all entries expired based on the max age or all entries (if max age is missing),
 // note that this does not mean that the server will send 401/407 to the next request,
 // when the request header credentials are still valid (Allow passed).
-func (b *BasicAuth) gc() int {
+func (b *BasicAuth[U]) gc() int {
 	now := time.Now()
-	var markedForDeletion []string
 
-	b.mu.RLock()
-	for fullUser, expiresAt := range b.credentials {
-		if expiresAt == nil || expiresAt.Before(now) {
-			markedForDeletion = append(markedForDeletion, fullUser)
-		}
-	}
-	b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	n := len(markedForDeletion)
-	if n > 0 {
-		for _, fullUser := range markedForDeletion {
-			b.mu.Lock()
-			delete(b.credentials, fullUser)
-			b.mu.Unlock()
-		}
-	}
+	before := len(b.credentials)
+	maps.DeleteFunc(b.credentials, func(_ string, expiresAt time.Time) bool {
+		// Entries without an expiration (MaxAge == 0) are removed as well,
+		// as documented on the Options.GC field.
+		return expiresAt.IsZero() || expiresAt.Before(now)
+	})
 
-	return n
+	return before - len(b.credentials)
 }

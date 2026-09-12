@@ -3,8 +3,10 @@ package basicauth
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -28,38 +30,42 @@ type User interface {
 	GetPassword() string
 }
 
-// SimpleUser implements the User interface
-// and it is used internally to store the
-// current authenticated user to the HTTP request value
-// when the Options.Allow does not return any value.
+// SimpleUser implements the User interface.
+// It is the user type of the Default function and the AllowUsersMap AuthFunc.
 type SimpleUser struct {
 	Username string
 	Password string
 }
 
 // GetUsername returns the Username field.
-func (u *SimpleUser) GetUsername() string {
+func (u SimpleUser) GetUsername() string {
 	return u.Username
 }
 
-// GetPassword returns the Username field.
-func (u *SimpleUser) GetPassword() string {
+// GetPassword returns the Password field.
+func (u SimpleUser) GetPassword() string {
 	return u.Password
 }
 
 // UserAuthOptions holds optional user authentication options
-// that can be given to the builtin Default and Load (and AllowUsers, AllowUsersFile) functions.
-type UserAuthOptions struct {
+// that can be given to the builtin Default and Load (and AllowUsers, AllowUsersMap, AllowUsersFile) functions.
+type UserAuthOptions[U any] struct {
+	// ComparePassword compares the stored password of a user with the user input.
 	// Defaults to plain check, can be modified for encrypted passwords,
 	// see the BCRYPT optional function.
 	ComparePassword func(stored, userPassword string) bool
+	// Credentials returns the username and the stored password of a user list element.
+	// When nil, AllowUsers reads them from the User interface methods
+	// or from the Username and Password struct fields (or their json tags).
+	// See the Credentials optional function.
+	Credentials func(user U) (username, password string)
 }
 
 // UserAuthOption is the option function type
-// for the Default and Load (and AllowUsers, AllowUsersFile) functions.
+// for the Default and Load (and AllowUsers, AllowUsersMap, AllowUsersFile) functions.
 //
-// See BCRYPT for an implementation.
-type UserAuthOption func(*UserAuthOptions)
+// See BCRYPT and Credentials for implementations.
+type UserAuthOption[U any] func(*UserAuthOptions[U])
 
 // BCRYPT it is a UserAuthOption, it compares a bcrypt hashed password with its user input.
 // Reports true on success and false on failure.
@@ -73,113 +79,134 @@ type UserAuthOption func(*UserAuthOptions)
 //	Default(..., BCRYPT) OR
 //	Load(..., BCRYPT) OR
 //	Options.Allow = AllowUsers(..., BCRYPT) OR
-//	OPtions.Allow = AllowUsersFile(..., BCRYPT)
-func BCRYPT(opts *UserAuthOptions) {
+//	Options.Allow = AllowUsersFile[Map](..., BCRYPT)
+func BCRYPT[U any](opts *UserAuthOptions[U]) {
 	opts.ComparePassword = func(stored, userPassword string) bool {
 		err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(userPassword))
 		return err == nil
 	}
 }
 
-func toUserAuthOptions(opts []UserAuthOption) (options UserAuthOptions) {
+// Credentials is a UserAuthOption which tells AllowUsers how to read
+// the username and the stored password out of a user list element,
+// instead of relying on the User interface or on the struct field names.
+//
+// Usage:
+//
+//	AllowUsers(members, Credentials(func(m Member) (string, string) {
+//		return m.Email, m.Hash
+//	}), BCRYPT)
+func Credentials[U any](fn func(user U) (username, password string)) UserAuthOption[U] {
+	return func(opts *UserAuthOptions[U]) {
+		opts.Credentials = fn
+	}
+}
+
+func plainComparePassword(stored, userPassword string) bool {
+	return stored == userPassword
+}
+
+func toUserAuthOptions[U any](opts []UserAuthOption[U]) (options UserAuthOptions[U]) {
 	for _, opt := range opts {
 		opt(&options)
 	}
 
 	if options.ComparePassword == nil {
-		options.ComparePassword = func(stored, userPassword string) bool {
-			return stored == userPassword
-		}
+		options.ComparePassword = plainComparePassword
 	}
 
 	return options
 }
 
+// credentials returns the username and stored password of a user list element,
+// using the Credentials option when set and the builtin extraction otherwise.
+func (options UserAuthOptions[U]) credentials(u U) (username, password string, ok bool) {
+	if options.Credentials != nil {
+		username, password = options.Credentials(u)
+		return username, password, username != "" && password != ""
+	}
+
+	return extractUsernameAndPassword(u)
+}
+
 // AllowUsers is an AuthFunc which authenticates user input based on a (static) user list.
-// The "users" input parameter can be one of the following forms:
+// The credentials of each element are resolved once, when AllowUsers is called,
+// so serving a request costs a map lookup and a password comparison.
+// The element type U can be:
 //
-//	map[string]string e.g. {username: password, username: password...}.
-//	[]map[string]any e.g. []{"username": "...", "password": "...", "other_field": ...}, ...}.
-//	[]T which T completes the User interface.
-//	[]T which T contains at least Username and Password fields.
+//	a type which completes the User interface,
+//	a struct (or pointer to struct) with Username and Password string fields,
+//	or with fields tagged `json:"username"` and `json:"password"`, embedded structs included,
+//	a Map (map[string]any) with "username" and "password" keys,
+//	any other type, when the Credentials option is given.
+//
+// Elements without both a username and a password are skipped.
+// The authenticated user returned to the handlers is the matching list element.
 //
 // Usage:
-// New(Options{Allow: AllowUsers(..., [BCRYPT])})
-func AllowUsers(users any, opts ...UserAuthOption) AuthFunc {
-	// create a local user structure to be used in the map copy,
-	// takes longer to initialize but faster to serve.
-	type user struct {
-		password string
-		ref      any
-	}
-	cp := make(map[string]*user)
-
-	v := reflect.Indirect(reflect.ValueOf(users))
-	switch v.Kind() {
-	case reflect.Slice:
-		for i := 0; i < v.Len(); i++ {
-			elem := v.Index(i).Interface()
-			// MUST contain a username and password.
-			username, password, ok := extractUsernameAndPassword(elem)
-			if !ok {
-				continue
-			}
-
-			cp[username] = &user{
-				password: password,
-				ref:      elem,
-			}
-		}
-	case reflect.Map:
-		elem := v.Interface()
-		switch m := elem.(type) {
-		case map[string]string:
-			return userMap(m, opts...)
-		case map[string]any:
-			username, password, ok := mapUsernameAndPassword(m)
-			if !ok {
-				break
-			}
-
-			cp[username] = &user{
-				password: password,
-				ref:      m,
-			}
-		default:
-			panic(fmt.Sprintf("unsupported type of map: %T", users))
-		}
-	default:
-		panic(fmt.Sprintf("unsupported type: %T", users))
-	}
-
+//
+//	New(Options[MyUser]{Allow: AllowUsers(users, [BCRYPT])})
+func AllowUsers[U any](users []U, opts ...UserAuthOption[U]) AuthFunc[U] {
 	options := toUserAuthOptions(opts)
 
-	return func(_ *http.Request, username, password string) (any, bool) {
-		if u, ok := cp[username]; ok { // fast map access,
-			if options.ComparePassword(u.password, password) {
-				return u.ref, true
-			}
+	// create a local user structure to be used in the map copy,
+	// takes longer to initialize but faster to serve.
+	type entry struct {
+		password string
+		user     U
+	}
+	cp := make(map[string]entry, len(users))
+
+	for _, u := range users {
+		// MUST contain a username and password.
+		username, password, ok := options.credentials(u)
+		if !ok {
+			continue
 		}
 
-		return nil, false
+		cp[username] = entry{password: password, user: u}
+	}
+
+	return func(_ *http.Request, username, password string) (U, bool) {
+		if e, ok := cp[username]; ok && options.ComparePassword(e.password, password) {
+			return e.user, true
+		}
+
+		var zero U
+		return zero, false
 	}
 }
 
-func userMap(usernamePassword map[string]string, opts ...UserAuthOption) AuthFunc {
+// AllowUsersMap is an AuthFunc which authenticates user input based on
+// a (static) username:password map. The map is copied, later changes to it are not seen.
+// The authenticated user returned to the handlers is a SimpleUser
+// holding the username and the password the client sent.
+//
+// Usage:
+//
+//	New(Options[SimpleUser]{Allow: AllowUsersMap(map[string]string{"admin": "admin"}, [BCRYPT])})
+func AllowUsersMap(users map[string]string, opts ...UserAuthOption[SimpleUser]) AuthFunc[SimpleUser] {
 	options := toUserAuthOptions(opts)
+	usernamePassword := maps.Clone(users)
 
-	return func(_ *http.Request, username, password string) (any, bool) {
-		pass, ok := usernamePassword[username]
-		return nil, ok && options.ComparePassword(pass, password)
+	return func(_ *http.Request, username, password string) (SimpleUser, bool) {
+		if stored, ok := usernamePassword[username]; ok && options.ComparePassword(stored, password) {
+			return SimpleUser{Username: username, Password: password}, true
+		}
+
+		return SimpleUser{}, false
 	}
 }
 
 // AllowUsersFile is an AuthFunc which authenticates user input based on a (static) user list
-// loaded from a file on initialization.
+// loaded from a JSON or YAML file on initialization. The file is decoded into a []U,
+// so U can be any struct with the matching json/yaml tags, or Map to keep every field as is.
+// The username and password are then resolved as documented on AllowUsers.
 //
 // Example Code:
 //
-//	New(Options{Allow: AllowUsersFile("users.yml", BCRYPT)})
+//	New(Options[Map]{Allow: AllowUsersFile[Map]("users.yml", BCRYPT)})
+//	New(Options[Member]{Allow: AllowUsersFile[Member]("users.yml", BCRYPT)})
 //
 // The users.yml file looks like the following:
 //   - username: kataras
@@ -189,124 +216,198 @@ func userMap(usernamePassword map[string]string, opts ...UserAuthOption) AuthFun
 //   - username: makis
 //     password: makis_password
 //     ...
-func AllowUsersFile(jsonOrYamlFilename string, opts ...UserAuthOption) AuthFunc {
-	var (
-		usernamePassword map[string]string
-		// no need to support too much forms, this would be for:
-		// "$username": { "password": "$pass", "other_field": ...}
-		userList []map[string]any
-	)
-
-	if err := decodeFile(jsonOrYamlFilename, &usernamePassword, &userList); err != nil {
+//
+// The short form below is supported as well, when U is Map or SimpleUser:
+//
+//	kataras: kataras_pass
+//	makis: makis_password
+//
+// It panics when the file cannot be read or decoded.
+func AllowUsersFile[U any](jsonOrYamlFilename string, opts ...UserAuthOption[U]) AuthFunc[U] {
+	users, err := loadUsersFile[U](jsonOrYamlFilename)
+	if err != nil {
 		panic(err)
 	}
 
-	if len(usernamePassword) > 0 {
-		// JSON Form: { "$username":"$pass", "$username": "$pass" }
-		// YAML Form: $username: $pass
-		// 			  $username: $pass
-		return userMap(usernamePassword, opts...)
-	}
-
-	if len(userList) > 0 {
-		// JSON Form: [{"username": "$username", "password": "$pass", "other_field": ...}, {"username": ...}, ... ]
-		// YAML Form:
-		// - username: $username
-		//   password: $password
-		//   other_field: ...
-		return AllowUsers(userList, opts...)
-	}
-
-	panic("malformed document file: " + jsonOrYamlFilename)
+	return AllowUsers(users, opts...)
 }
 
-func decodeFile(src string, dest ...any) error {
+// loadUsersFile decodes a user list file into a []U.
+// It tries the list form first and then the username: password form.
+func loadUsersFile[U any](src string) ([]U, error) {
 	data, err := ReadFile(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// We use unmarshal instead of file decoder
-	// as we may need to read it more than once (dests, see below).
-	var (
-		unmarshal func(data []byte, v any) error
-		ext       string
-	)
+	// We use unmarshal instead of a file decoder
+	// as we may need to decode the data more than once (see below).
+	var unmarshal func(data []byte, v any) error
 
-	if idx := strings.LastIndexByte(src, '.'); idx > 0 {
-		ext = src[idx:]
-	}
-
-	switch ext {
+	switch ext := filepath.Ext(src); ext {
 	case "", ".json":
 		unmarshal = json.Unmarshal
 	case ".yml", ".yaml":
 		unmarshal = yaml.Unmarshal
 	default:
-		return fmt.Errorf("unexpected file extension: %s", ext)
+		return nil, fmt.Errorf("unexpected file extension: %s", ext)
 	}
 
-	var (
-		ok      bool
-		lastErr error
-	)
+	// JSON Form: [{"username": "$username", "password": "$pass", "other_field": ...}, {"username": ...}, ... ]
+	// YAML Form:
+	// - username: $username
+	//   password: $password
+	//   other_field: ...
+	var list []U
+	listErr := unmarshal(data, &list)
+	if listErr == nil && len(list) > 0 {
+		return list, nil
+	}
 
-	for _, d := range dest {
-		if err = unmarshal(data, d); err == nil {
-			ok = true
-		} else {
-			lastErr = err
+	// JSON Form: { "$username":"$pass", "$username": "$pass" }
+	// YAML Form: $username: $pass
+	// 			  $username: $pass
+	var pairs map[string]string
+	if err = unmarshal(data, &pairs); err != nil || len(pairs) == 0 {
+		if listErr == nil {
+			listErr = err
 		}
+		return nil, fmt.Errorf("malformed document file: %s: %w", src, listErr)
 	}
 
-	if !ok {
-		return lastErr
+	list = make([]U, 0, len(pairs))
+	for username, password := range pairs {
+		u, ok := pairToUser[U](username, password)
+		if !ok {
+			return nil, fmt.Errorf("document file: %s: the username: password form requires a Map or SimpleUser user type, got %T", src, u)
+		}
+		list = append(list, u)
 	}
 
-	return nil // if at least one is succeed we are ok.
+	return list, nil
 }
 
-func extractUsernameAndPassword(s any) (username, password string, ok bool) {
-	if s == nil {
-		return
+// pairToUser builds a U out of a username: password file entry.
+// Only Map and SimpleUser carry no other information, so only they are supported.
+func pairToUser[U any](username, password string) (U, bool) {
+	var u U
+	switch p := any(&u).(type) {
+	case *Map:
+		*p = Map{"username": username, "password": password}
+	case *SimpleUser:
+		*p = SimpleUser{Username: username, Password: password}
+	default:
+		return u, false
 	}
 
+	return u, true
+}
+
+// extractUsernameAndPassword reads the credentials out of a user list element.
+// It accepts, in this order: a User implementation, a map[string]any and
+// a struct (or pointer to struct) with Username and Password fields.
+// Struct fields are matched by name ("Username", "Password") or by their json tag
+// ("username", "password"), and embedded structs are searched too.
+func extractUsernameAndPassword(s any) (username, password string, ok bool) {
 	switch u := s.(type) {
+	case nil:
+		return "", "", false
 	case User:
-		username = u.GetUsername()
-		password = u.GetPassword()
-		ok = username != "" && password != ""
-		return
+		username, password = u.GetUsername(), u.GetPassword()
+		return username, password, username != "" && password != ""
 	case map[string]any:
 		return mapUsernameAndPassword(u)
 	default:
-		b, err := json.Marshal(u)
-		if err != nil {
-			return
-		}
-
-		var m map[string]any
-		if err = json.Unmarshal(b, &m); err != nil {
-			return
-		}
-
-		return mapUsernameAndPassword(m)
+		return structUsernameAndPassword(reflect.ValueOf(s))
 	}
 }
 
+// structUsernameAndPassword walks the exported fields of a struct value
+// (dereferencing pointers and descending into embedded structs)
+// and returns the string values of its username and password fields.
+func structUsernameAndPassword(v reflect.Value) (username, password string, ok bool) {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return "", "", false
+		}
+		v = v.Elem()
+	}
+
+	if v.Kind() != reflect.Struct {
+		return "", "", false
+	}
+
+	var usernameFound, passwordFound bool
+	for field, value := range v.Fields() {
+		if field.Anonymous {
+			// An explicitly tagged embedded field is a regular field, do not descend.
+			if _, tagged := field.Tag.Lookup("json"); !tagged {
+				if u, p, found := structUsernameAndPassword(value); found {
+					if !usernameFound {
+						username, usernameFound = u, true
+					}
+					if !passwordFound {
+						password, passwordFound = p, true
+					}
+					if usernameFound && passwordFound {
+						break
+					}
+				}
+				continue
+			}
+		}
+
+		if !field.IsExported() || value.Kind() != reflect.String {
+			continue
+		}
+
+		switch fieldKey(field) {
+		case "username":
+			if !usernameFound {
+				username, usernameFound = value.String(), true
+			}
+		case "password":
+			if !passwordFound {
+				password, passwordFound = value.String(), true
+			}
+		}
+
+		if usernameFound && passwordFound {
+			break
+		}
+	}
+
+	ok = username != "" && password != ""
+	return username, password, ok
+}
+
+// fieldKey returns the lower-cased name a struct field is matched by:
+// the json tag name when present, the field name otherwise.
+func fieldKey(field reflect.StructField) string {
+	if tag, found := field.Tag.Lookup("json"); found {
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "-" {
+			return ""
+		}
+		if name != "" {
+			return strings.ToLower(name)
+		}
+	}
+
+	return strings.ToLower(field.Name)
+}
+
 func mapUsernameAndPassword(m map[string]any) (username, password string, ok bool) {
-	// type of username: password.
+	// Single entry of the form username: password.
 	if len(m) == 1 {
-		for username, v := range m {
-			if password, ok := v.(string); ok {
-				ok := username != "" && password != ""
-				return username, password, ok
+		for k, v := range m {
+			if pass, isString := v.(string); isString {
+				return k, pass, k != "" && pass != ""
 			}
 		}
 	}
 
 	var usernameFound, passwordFound bool
-
 	for k, v := range m {
 		switch k {
 		case "username", "Username":
@@ -316,10 +417,9 @@ func mapUsernameAndPassword(m map[string]any) (username, password string, ok boo
 		}
 
 		if usernameFound && passwordFound {
-			ok = true
-			break
+			return username, password, true
 		}
 	}
 
-	return
+	return "", "", false
 }

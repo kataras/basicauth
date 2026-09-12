@@ -1,6 +1,6 @@
 module github.com/kataras/basicauth
 
-go 1.25
+go 1.27
 
 require (
 	golang.org/x/crypto v0.47.0

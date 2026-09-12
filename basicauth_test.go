@@ -22,17 +22,21 @@ func TestNew(t *testing.T) {
 		{"george", "george_pass", []role{}},
 	}
 
-	opts := Options{
+	auth := New(Options[user]{
 		Realm:                DefaultRealm,
 		Allow:                AllowUsers(users),
 		OnLogoutClearContext: true,
-	}
-	auth := New(opts)
+	})
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, ok := GetUser(r).(user) // test get user by sending it as a json response.
+	handler := auth.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := auth.User(r) // test get user by sending it as a json response.
 		if !ok {
-			t.Fatal("unexpected user type")
+			t.Fatal("expected an authenticated user")
+		}
+
+		// The package-level accessor sees the same value.
+		if pkgUser, ok := GetUser[user](r); !ok || pkgUser.Username != u.Username {
+			t.Fatalf("GetUser mismatch: %#+v (ok=%v) vs %#+v", pkgUser, ok, u)
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -42,15 +46,14 @@ func TestNew(t *testing.T) {
 		}
 
 		// test OnLogoutClearContext
-		r = Logout(r)
+		r = auth.Logout(r)
 		username, password, ok := r.BasicAuth()
 		if ok {
 			t.Fatalf("expected request's basic authentication credentials to be removed but got: %s:%s", username, password)
 		}
 
-		v := GetUser(r)
-		if v != nil {
-			t.Fatalf("expected a nil user as its stored credentials removed but got: %#+v", v)
+		if v, ok := auth.User(r); ok {
+			t.Fatalf("expected no user as its stored credentials were removed but got: %#+v", v)
 		}
 	})
 
@@ -67,7 +70,7 @@ func TestNew(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		te := testHandler(t, auth(handler), http.MethodGet, "/",
+		te := testHandler(t, handler, http.MethodGet, "/",
 			withRequestID(i), withBasicAuth(tt.username, tt.password),
 		)
 
@@ -77,5 +80,41 @@ func TestNew(t *testing.T) {
 		} else {
 			te.statusCode(http.StatusUnauthorized)
 		}
+	}
+}
+
+func TestDefault(t *testing.T) {
+	auth := Default(map[string]string{"admin": "admin"})
+
+	handler := auth.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := auth.User(r)
+		if !ok {
+			t.Fatal("expected a SimpleUser")
+		}
+		if u.Username != "admin" || u.Password != "admin" {
+			t.Fatalf("unexpected user: %#+v", u)
+		}
+	}))
+
+	testHandler(t, handler, http.MethodGet, "/", withBasicAuth("admin", "admin")).statusCode(http.StatusOK)
+	testHandler(t, handler, http.MethodGet, "/", withBasicAuth("admin", "wrong")).statusCode(http.StatusUnauthorized)
+	testHandler(t, handler, http.MethodGet, "/").statusCode(http.StatusUnauthorized)
+}
+
+func TestMiddlewareAdapters(t *testing.T) {
+	auth := Default(map[string]string{"admin": "admin"})
+	index := func(w http.ResponseWriter, r *http.Request) {}
+
+	handlers := map[string]http.Handler{
+		"Func":        Func(auth.Middleware())(index),
+		"HandlerFunc": HandlerFunc(auth.Middleware(), index),
+		"method":      auth.HandlerFunc(index),
+	}
+
+	for name, handler := range handlers {
+		t.Run(name, func(t *testing.T) {
+			testHandler(t, handler, http.MethodGet, "/", withBasicAuth("admin", "admin")).statusCode(http.StatusOK)
+			testHandler(t, handler, http.MethodGet, "/").statusCode(http.StatusUnauthorized)
+		})
 	}
 }

@@ -14,9 +14,9 @@ import (
 	_ "github.com/go-sql-driver/mysql" // lint: mysql driver.
 )
 
-// User is just an example structure of a user,
-// it MUST contain a Username and Password exported fields
-// or complete the basicauth.User interface.
+// User is just an example structure of a user.
+// The Allow function below returns it, so the handlers
+// get a *User back from auth.User(r) with no type assertion.
 type User struct {
 	ID       int64  `db:"id" json:"id"`
 	Username string `db:"username" json:"username"`
@@ -36,33 +36,36 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Validate a user from database.
-	allowFunc := func(r *http.Request, username, password string) (any, bool) {
-		user, err := db.getUserByUsernameAndPassword(context.Background(), username, password)
-		return user, err == nil
+	// Validate a user from database. The returned type is the user type
+	// of the middleware, no "any" involved.
+	allowFunc := func(r *http.Request, username, password string) (*User, bool) {
+		user, err := db.getUserByUsernameAndPassword(r.Context(), username, password)
+		if err != nil {
+			return nil, false
+		}
+		return &user, true
 	}
 
-	opts := basicauth.Options{
+	auth := basicauth.New(basicauth.Options[*User]{
 		Realm:        basicauth.DefaultRealm,
 		ErrorHandler: basicauth.DefaultErrorHandler,
 		Allow:        allowFunc,
-	}
-
-	auth := basicauth.New(opts)
+	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", index)
+	mux.HandleFunc("/", auth.HandlerFunc(index))
 	log.Println("Listening on :8080")
-	http.ListenAndServe(":8080", auth(mux))
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
 func index(w http.ResponseWriter, r *http.Request) {
-	user := basicauth.GetUser(r)
+	// Same as auth.User(r), for handlers that do not hold the auth instance.
+	user, _ := basicauth.GetUser[*User](r)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	enc.Encode(user)
+	_ = enc.Encode(user)
 }
 
 func getenv(key string, def string) string {

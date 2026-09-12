@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -15,10 +16,10 @@ type IUserRepository interface {
 	GetByUsernameAndPassword(dest any, username, password string) error
 }
 
-// Test a custom implementation of AuthFunc with a user repository.
-// This is a usage example of custom AuthFunc implementation.
-func UserRepository(repo IUserRepository, newUserPtr func() any) AuthFunc {
-	return func(r *http.Request, username, password string) (any, bool) {
+// UserRepository is a usage example of a custom, typed AuthFunc
+// backed by a user repository (e.g. a database).
+func UserRepository[U any](repo IUserRepository, newUserPtr func() *U) AuthFunc[*U] {
+	return func(r *http.Request, username, password string) (*U, bool) {
 		dest := newUserPtr()
 		err := repo.GetByUsernameAndPassword(dest, username, password)
 		if err == nil {
@@ -35,7 +36,7 @@ type testUser struct {
 	email    string // custom field.
 }
 
-// GetUsername & Getpassword complete the User interface.
+// GetUsername & GetPassword complete the User interface.
 func (u *testUser) GetUsername() string {
 	return u.username
 }
@@ -67,7 +68,7 @@ func TestAllowUserRepository(t *testing.T) {
 		},
 	}
 
-	allow := UserRepository(repo, func() any {
+	allow := UserRepository(repo, func() *testUser {
 		return new(testUser)
 	})
 
@@ -91,7 +92,7 @@ func TestAllowUserRepository(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		v, ok := allow(nil, tt.username, tt.password)
+		u, ok := allow(nil, tt.username, tt.password)
 
 		if tt.ok != ok {
 			t.Fatalf("[%d] expected: %v but got: %v (username=%s,password=%s)", i, tt.ok, ok, tt.username, tt.password)
@@ -101,11 +102,6 @@ func TestAllowUserRepository(t *testing.T) {
 			continue
 		}
 
-		u, ok := v.(*testUser)
-		if !ok {
-			t.Fatalf("[%d] a user should be type of *testUser but got: %#+v (%T)", i, v, v)
-		}
-
 		if !reflect.DeepEqual(tt.user, u) {
 			t.Fatalf("[%d] expected user:\n%#+v\nbut got:\n%#+v", i, tt.user, u)
 		}
@@ -113,8 +109,8 @@ func TestAllowUserRepository(t *testing.T) {
 }
 
 func TestAllowUsers(t *testing.T) {
-	users := []User{
-		&testUser{username: "kataras", password: "kataras_pass", email: "kataras2006@hotmail.com"},
+	users := []*testUser{
+		{username: "kataras", password: "kataras_pass", email: "kataras2006@hotmail.com"},
 	}
 
 	allow := AllowUsers(users)
@@ -139,7 +135,7 @@ func TestAllowUsers(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		v, ok := allow(nil, tt.username, tt.password)
+		u, ok := allow(nil, tt.username, tt.password)
 
 		if tt.ok != ok {
 			t.Fatalf("[%d] expected: %v but got: %v (username=%s,password=%s)", i, tt.ok, ok, tt.username, tt.password)
@@ -149,42 +145,83 @@ func TestAllowUsers(t *testing.T) {
 			continue
 		}
 
-		u, ok := v.(*testUser)
-		if !ok {
-			t.Fatalf("[%d] a user should be type of *testUser but got: %#+v (%T)", i, v, v)
-		}
-
 		if !reflect.DeepEqual(tt.user, u) {
 			t.Fatalf("[%d] expected user:\n%#+v\nbut got:\n%#+v", i, tt.user, u)
 		}
 	}
 }
 
-// Test YAML user loading with b-encrypted passwords.
-func TestAllowUsersFile(t *testing.T) {
-	f, err := os.CreateTemp("", "*users.yml")
-	if err != nil {
-		t.Fatal(err)
+// A user list through the User interface list type itself.
+func TestAllowUsersInterfaceSlice(t *testing.T) {
+	users := []User{
+		&testUser{username: "kataras", password: "kataras_pass"},
+		SimpleUser{Username: "makis", Password: "makis_pass"},
 	}
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(f.Name())
-	}()
 
-	// 	f.WriteString(`
-	// - username: kataras
-	//   password: kataras_pass
-	//   age: 27
-	//   role: admin
-	// - username: makis
-	//   password: makis_password
-	// `)
-	// This form is supported too, although its features are limited (no custom fields):
-	// 	f.WriteString(`
-	// kataras: kataras_pass
-	// makis: makis_password
-	// `)
+	allow := AllowUsers(users)
 
+	u, ok := allow(nil, "makis", "makis_pass")
+	if !ok {
+		t.Fatal("expected makis to be allowed")
+	}
+	if u.GetUsername() != "makis" {
+		t.Fatalf("expected the matching list element but got %#+v", u)
+	}
+	if _, ok = allow(nil, "kataras", "makis_pass"); ok {
+		t.Fatal("expected a wrong password to be rejected")
+	}
+}
+
+func TestAllowUsersCredentialsOption(t *testing.T) {
+	type member struct {
+		Email string
+		Hash  string
+	}
+
+	members := []member{
+		{Email: "kataras@example.com", Hash: mustGeneratePassword(t, "kataras_pass")},
+	}
+
+	allow := AllowUsers(members, Credentials(func(m member) (string, string) {
+		return m.Email, m.Hash
+	}), BCRYPT)
+
+	m, ok := allow(nil, "kataras@example.com", "kataras_pass")
+	if !ok {
+		t.Fatal("expected the member to be allowed")
+	}
+	if m != members[0] {
+		t.Fatalf("expected the matching member but got %#+v", m)
+	}
+	if _, ok = allow(nil, "kataras@example.com", "wrong"); ok {
+		t.Fatal("expected a wrong password to be rejected")
+	}
+}
+
+func TestAllowUsersMap(t *testing.T) {
+	users := map[string]string{"kataras": mustGeneratePassword(t, "kataras_pass")}
+	allow := AllowUsersMap(users, BCRYPT)
+
+	// The map is copied on creation.
+	users["late"] = "late_pass"
+
+	u, ok := allow(nil, "kataras", "kataras_pass")
+	if !ok {
+		t.Fatal("expected kataras to be allowed")
+	}
+	if u != (SimpleUser{Username: "kataras", Password: "kataras_pass"}) {
+		t.Fatalf("unexpected user: %#+v", u)
+	}
+	if _, ok = allow(nil, "kataras", "wrong"); ok {
+		t.Fatal("expected a wrong password to be rejected")
+	}
+	if _, ok = allow(nil, "late", "late_pass"); ok {
+		t.Fatal("expected changes to the source map to be ignored")
+	}
+}
+
+// Test YAML user loading with bcrypt-encrypted passwords.
+func TestAllowUsersFile(t *testing.T) {
 	var tests = []struct {
 		username      string
 		password      string // hashed, auto-filled later on.
@@ -227,39 +264,31 @@ func TestAllowUsersFile(t *testing.T) {
 			tt.user["username"] = tt.username
 			tt.user["password"] = tt.password
 
-			// cannot write it as a stream, write it as a slice.
-			// enc.Encode(tt.user)
 			usersToWrite = append(usersToWrite, tt.user)
 		}
-		// 	bcrypt.GenerateFromPassword([]byte("kataras_pass"), bcrypt.DefaultCost)
 	}
 
 	fileContents, err := yaml.Marshal(usersToWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = f.Write(fileContents)
+
+	filename := filepath.Join(t.TempDir(), "users.yml")
+	if err = os.WriteFile(filename, fileContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Build the authentication func.
-	allow := AllowUsersFile(f.Name(), BCRYPT)
+	allow := AllowUsersFile[Map](filename, BCRYPT)
 	for i, tt := range tests {
-		v, ok := allow(nil, tt.username, tt.inputPassword)
+		u, ok := allow(nil, tt.username, tt.inputPassword)
 
 		if tt.ok != ok {
-			t.Fatalf("[%d] expected: %v but got: %v (username=%s,password=%s,user=%#+v)", i, tt.ok, ok, tt.username, tt.inputPassword, v)
+			t.Fatalf("[%d] expected: %v but got: %v (username=%s,password=%s,user=%#+v)", i, tt.ok, ok, tt.username, tt.inputPassword, u)
 		}
 
 		if !ok {
 			continue
-		}
-
-		if len(tt.user) == 0 { // when username: password form.
-			continue
-		}
-
-		u, ok := v.(Map)
-		if !ok {
-			t.Fatalf("[%d] a user loaded from external source or file should be alway type of map[string]any but got: %#+v (%T)", i, v, v)
 		}
 
 		if expected, got := len(tt.user), len(u); expected != got {
@@ -273,6 +302,22 @@ func TestAllowUsersFile(t *testing.T) {
 		}
 	}
 
+	// The same file decoded into a typed user.
+	type member struct {
+		Username string `yaml:"username"`
+		Password string `yaml:"password"`
+		Age      int    `yaml:"age"`
+		Role     string `yaml:"role"`
+	}
+
+	typed := AllowUsersFile[member](filename, BCRYPT)
+	m, ok := typed(nil, "kataras", "kataras_pass")
+	if !ok {
+		t.Fatal("expected kataras to be allowed through the typed loader")
+	}
+	if m.Age != 27 || m.Role != "admin" {
+		t.Fatalf("unexpected typed user: %#+v", m)
+	}
 }
 
 func mustGeneratePassword(t *testing.T, userPassword string) string {
