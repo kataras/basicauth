@@ -33,9 +33,9 @@ var auth = basicauth.New(basicauth.Options[User]{
 	// Prompt for new credentials on a client's request
 	// made after 10 minutes the user has logged in:
 	MaxAge: 10 * time.Minute,
-	// Clear any expired users from the memory every one hour,
-	// note that the user's expiration time will be
-	// reset on the next valid request (when Allow passed).
+	// Clear any expired users from the memory every two hours.
+	// The expiration is counted from the first login and is not refreshed
+	// by later requests; after MaxAge the client is challenged again.
 	GC: basicauth.GC{
 		Every: 2 * time.Hour,
 	},

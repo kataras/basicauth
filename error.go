@@ -56,24 +56,30 @@ func (e ErrHTTPVersion) Error() string {
 	return "http version not supported"
 }
 
+// The Error methods name the user but never include the password or the raw
+// authorization header (which is base64 of username:password). The messages are
+// logged by Options.ErrorLogger and a custom ErrorHandler may write them to the
+// response; a failed login is very often a valid user's typo of their real password.
+// The Password field stays on the structs for handlers that deliberately need it.
+
 func (e ErrCredentialsForbidden) Error() string {
-	return fmt.Sprintf("credentials: forbidden <%s:%s> for <%s> after <%d> attempts", e.Username, e.Password, e.Age, e.Tries)
+	return fmt.Sprintf("credentials: forbidden <%s> for <%s> after <%d> attempts", e.Username, e.Age, e.Tries)
 }
 
 func (e ErrCredentialsMissing) Error() string {
 	if e.Header != "" {
-		return fmt.Sprintf("credentials: malformed <%s>", e.Header)
+		return "credentials: malformed header"
 	}
 
 	return "empty credentials"
 }
 
 func (e ErrCredentialsInvalid) Error() string {
-	return fmt.Sprintf("credentials: invalid <%s:%s> current tries <%d>", e.Username, e.Password, e.CurrentTries)
+	return fmt.Sprintf("credentials: invalid <%s> current tries <%d>", e.Username, e.CurrentTries)
 }
 
 func (e ErrCredentialsExpired) Error() string {
-	return fmt.Sprintf("credentials: expired <%s:%s>", e.Username, e.Password)
+	return fmt.Sprintf("credentials: expired <%s>", e.Username)
 }
 
 // DefaultErrorHandler is the default error handler for the Options.ErrorHandler field.

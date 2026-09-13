@@ -3,6 +3,7 @@ package basicauth
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 // contextKey is the type of the single key the middleware stores in the request context.
@@ -14,8 +15,9 @@ type logoutFunc func(*http.Request) *http.Request
 // Storing one value instead of one per field keeps the context chain short:
 // one allocation per request rather than one per stored field.
 type authInfo struct {
-	user   any
-	logout logoutFunc
+	user         any
+	authorizedAt time.Time
+	logout       logoutFunc
 }
 
 func getAuthInfo(r *http.Request) *authInfo {
@@ -43,6 +45,22 @@ func GetUser[U any](r *http.Request) (U, bool) {
 	return zero, false
 }
 
+// AuthorizedAt returns the time the request's credentials were first accepted
+// by a BasicAuth middleware, as implied by its Options.MaxAge entry.
+// It reports false when the request was not authenticated or when MaxAge is zero,
+// as the middleware keeps no per-login time without an expiration.
+//
+// Usage:
+//
+//	at, ok := basicauth.AuthorizedAt(r)
+func AuthorizedAt(r *http.Request) (time.Time, bool) {
+	if info := getAuthInfo(r); info != nil && !info.authorizedAt.IsZero() {
+		return info.authorizedAt, true
+	}
+
+	return time.Time{}, false
+}
+
 // Logout deletes the authenticated user entry from the backend.
 // The client should login again on the next request.
 // See BasicAuth.Logout and Options.OnLogoutClearContext for details.
@@ -55,8 +73,8 @@ func Logout(r *http.Request) *http.Request {
 }
 
 // newContext returns a new Context with specific basicauth values.
-func newContext(ctx context.Context, user any, logoutFn logoutFunc) context.Context {
-	return context.WithValue(ctx, contextKey{}, &authInfo{user: user, logout: logoutFn})
+func newContext(ctx context.Context, user any, authorizedAt time.Time, logoutFn logoutFunc) context.Context {
+	return context.WithValue(ctx, contextKey{}, &authInfo{user: user, authorizedAt: authorizedAt, logout: logoutFn})
 }
 
 // clearContext returns a Context whose basicauth values are removed.

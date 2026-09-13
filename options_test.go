@@ -54,6 +54,9 @@ func TestMaxTries(t *testing.T) {
 		if cookie.MaxAge != int(DefaultCookieMaxAge.Seconds()) {
 			t.Fatalf("[%d] expected cookie max age %d but got %d", i, int(DefaultCookieMaxAge.Seconds()), cookie.MaxAge)
 		}
+		if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+			t.Fatalf("[%d] expected an HttpOnly SameSite=Lax cookie but got HttpOnly=%v SameSite=%v", i, cookie.HttpOnly, cookie.SameSite)
+		}
 		tries = i
 	}
 
@@ -281,7 +284,7 @@ func TestHTTPSOnly(t *testing.T) {
 		expected int
 	}{
 		{"plain http/1.1", false, 1, http.StatusHTTPVersionNotSupported},
-		{"tls http/1.1", true, 1, http.StatusHTTPVersionNotSupported},
+		{"tls http/1.1", true, 1, http.StatusOK},
 		{"plain http/2", false, 2, http.StatusHTTPVersionNotSupported},
 		{"tls http/2", true, 2, http.StatusOK},
 	}

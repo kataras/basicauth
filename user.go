@@ -1,6 +1,8 @@
 package basicauth
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -51,7 +54,7 @@ func (u SimpleUser) GetPassword() string {
 // that can be given to the builtin Default and Load (and AllowUsers, AllowUsersMap, AllowUsersFile) functions.
 type UserAuthOptions[U any] struct {
 	// ComparePassword compares the stored password of a user with the user input.
-	// Defaults to plain check, can be modified for encrypted passwords,
+	// Defaults to a constant-time equality check, can be modified for encrypted passwords,
 	// see the BCRYPT optional function.
 	ComparePassword func(stored, userPassword string) bool
 	// Credentials returns the username and the stored password of a user list element.
@@ -59,6 +62,12 @@ type UserAuthOptions[U any] struct {
 	// or from the Username and Password struct fields (or their json tags).
 	// See the Credentials optional function.
 	Credentials func(user U) (username, password string)
+
+	// decoyPassword is what an unknown username is compared against, so the
+	// request costs the same whether or not the user exists and the endpoint
+	// does not enumerate valid usernames by response time. Nobody can
+	// authenticate with it, the username lookup has already failed.
+	decoyPassword string
 }
 
 // UserAuthOption is the option function type
@@ -85,7 +94,31 @@ func BCRYPT[U any](opts *UserAuthOptions[U]) {
 		err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(userPassword))
 		return err == nil
 	}
+	// A real bcrypt hash, so an absent username costs a full bcrypt comparison
+	// just like a present one. Generated once at configuration time from a value
+	// nobody can authenticate with.
+	opts.decoyPassword = bcryptDecoy()
 }
+
+// bcryptDecoy returns a bcrypt hash of an unguessable value, computed once.
+var bcryptDecoy = sync.OnceValue(func() string {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		// crypto/rand does not fail in practice; a fixed value still costs a full
+		// bcrypt comparison, which is all this is for.
+		secret = []byte(plainDecoyPassword)
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword(secret, bcrypt.DefaultCost)
+	if err != nil {
+		return "$2a$10$" + strings.Repeat("x", 53)
+	}
+
+	return string(hashed)
+})
+
+// plainDecoyPassword is the default decoy, see UserAuthOptions.decoyPassword.
+const plainDecoyPassword = "basicauth-decoy-password-value"
 
 // Credentials is a UserAuthOption which tells AllowUsers how to read
 // the username and the stored password out of a user list element,
@@ -102,8 +135,10 @@ func Credentials[U any](fn func(user U) (username, password string)) UserAuthOpt
 	}
 }
 
-func plainComparePassword(stored, userPassword string) bool {
-	return stored == userPassword
+// constantTimeComparePassword is the default ComparePassword:
+// a plain equality check that takes the same time whether or not the values match.
+func constantTimeComparePassword(stored, userPassword string) bool {
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(userPassword)) == 1
 }
 
 func toUserAuthOptions[U any](opts []UserAuthOption[U]) (options UserAuthOptions[U]) {
@@ -112,7 +147,13 @@ func toUserAuthOptions[U any](opts []UserAuthOption[U]) (options UserAuthOptions
 	}
 
 	if options.ComparePassword == nil {
-		options.ComparePassword = plainComparePassword
+		options.ComparePassword = constantTimeComparePassword
+	}
+
+	if options.decoyPassword == "" {
+		// ConstantTimeCompare is already constant-time for equal lengths, but the
+		// decoy keeps the code path identical for a present and an absent user.
+		options.decoyPassword = plainDecoyPassword
 	}
 
 	return options
@@ -168,11 +209,20 @@ func AllowUsers[U any](users []U, opts ...UserAuthOption[U]) AuthFunc[U] {
 	}
 
 	return func(_ *http.Request, username, password string) (U, bool) {
-		if e, ok := cp[username]; ok && options.ComparePassword(e.password, password) {
+		var zero U
+
+		e, ok := cp[username] // fast map access,
+		if !ok {
+			// Compare against a decoy so an unknown username costs the same as a
+			// known one. See decoyPassword.
+			options.ComparePassword(options.decoyPassword, password)
+			return zero, false
+		}
+
+		if options.ComparePassword(e.password, password) {
 			return e.user, true
 		}
 
-		var zero U
 		return zero, false
 	}
 }
@@ -190,7 +240,13 @@ func AllowUsersMap(users map[string]string, opts ...UserAuthOption[SimpleUser]) 
 	usernamePassword := maps.Clone(users)
 
 	return func(_ *http.Request, username, password string) (SimpleUser, bool) {
-		if stored, ok := usernamePassword[username]; ok && options.ComparePassword(stored, password) {
+		stored, ok := usernamePassword[username]
+		if !ok {
+			options.ComparePassword(options.decoyPassword, password)
+			return SimpleUser{}, false
+		}
+
+		if options.ComparePassword(stored, password) {
 			return SimpleUser{Username: username, Password: password}, true
 		}
 
